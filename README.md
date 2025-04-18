@@ -2,6 +2,8 @@
 
 This is a [Next.js](https://nextjs.org) project demonstrating real-time HTTP streaming using Web Streams API. The application showcases a retro-style chat interface that streams random words from the server to the client.
 
+![Demo Screenshot](./docs/screenshot.png)
+
 ## Key Features
 
 - Real-time text streaming using Web Streams API
