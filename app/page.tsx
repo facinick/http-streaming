@@ -1,11 +1,18 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import Image from 'next/image';
 
 type TraceEvent = {
   timestamp: number;
   type: 'request' | 'response' | 'chunk' | 'complete' | 'error';
   message: string;
+};
+
+type WindowState = {
+  isMaximized: boolean;
+  originalWidth: string;
+  originalHeight: string;
 };
 
 export default function Home() {
@@ -16,7 +23,25 @@ export default function Home() {
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const traceRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll effects
+  const [chatWindowState, setChatWindowState] = useState<WindowState>({
+    isMaximized: false,
+    originalWidth: 'w-[400px]',
+    originalHeight: 'h-[600px]',
+  });
+
+  const [traceWindowState, setTraceWindowState] = useState<WindowState>({
+    isMaximized: false,
+    originalWidth: 'w-[400px]',
+    originalHeight: 'h-[600px]',
+  });
+
+  const getWindowClasses = (state: WindowState) => {
+    if (state.isMaximized) {
+      return 'fixed top-0 left-0 right-0 bottom-0 m-0 w-screen h-screen';
+    }
+    return `${state.originalWidth} ${state.originalHeight}`;
+  };
+
   useEffect(() => {
     if (textAreaRef.current) {
       textAreaRef.current.scrollTop = textAreaRef.current.scrollHeight;
@@ -37,148 +62,192 @@ export default function Home() {
     }]);
   };
 
-  return (
-    <div className="min-h-screen bg-black text-green-400 flex items-center justify-center font-mono p-8">
-      {/* Main Chat Panel - Fixed size */}
-      <div className="bg-black border-2 border-green-400 p-8 w-96 mr-4 h-[600px] flex flex-col">
-        <h1 className="text-2xl font-bold mb-4 text-center">HTTP STREAMING</h1>
+  const handleStream = async () => {
+    if (isStreaming) return;
+    
+    // Reset states
+    setIsStreaming(true);
+    setStreamedText("");
+    setTraceEvents([]);
 
-        <div className="mb-4 flex-shrink-0">
-          <label
-            htmlFor="numWords"
-            className="block text-green-400 text-sm font-bold mb-2"
-          >
-            Number of Words:
-          </label>
-          <input
-            type="number"
-            id="numWords"
-            value={numWords}
-            onChange={(e) => setNumWords(e.target.value)}
-            className="bg-black border-2 border-green-400 rounded w-full py-2 px-3 text-green-400 focus:outline-none"
-            disabled={isStreaming}
-          />
-        </div>
+    // Validate input
+    const count = parseInt(numWords, 10);
+    if (isNaN(count) || count <= 0) {
+      setStreamedText("Please enter a valid positive number.");
+      setIsStreaming(false);
+      addTraceEvent('error', 'Invalid input: number must be positive');
+      return;
+    }
 
-        <div className="flex justify-center mb-4 flex-shrink-0">
-          <button
-            className="bg-green-400 text-black font-bold py-2 px-4 rounded focus:outline-none disabled:opacity-50 border-2 border-green-400"
-            onClick={async () => {
-              if (isStreaming) return;
-              
-              // Reset states
-              setIsStreaming(true);
-              setStreamedText("");
-              setTraceEvents([]);
+    try {
+      // Log request
+      addTraceEvent('request', `GET /api/stream?count=${count}`);
 
-              // Validate input
-              const count = parseInt(numWords, 10);
-              if (isNaN(count) || count <= 0) {
-                setStreamedText("Please enter a valid positive number.");
-                setIsStreaming(false);
-                addTraceEvent('error', 'Invalid input: number must be positive');
-                return;
-              }
+      // Make request
+      const response = await fetch(`/api/stream?count=${count}`);
 
-              // Log request
-              addTraceEvent('request', `GET /api/stream?count=${count}`);
+      if (!response.ok) {
+        setStreamedText(`Server error: ${response.status}`);
+        setIsStreaming(false);
+        addTraceEvent('error', `Server responded with ${response.status}`);
+        return;
+      }
 
-              // Make request
-              const response = await fetch(`/api/stream?count=${count}`);
+      // Log response
+      addTraceEvent('response', `200 OK - Stream started`);
 
-              if (!response.ok) {
-                setStreamedText(`Server error: ${response.status}`);
-                setIsStreaming(false);
-                addTraceEvent('error', `Server responded with ${response.status}`);
-                return;
-              }
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
 
-              // Log response
-              addTraceEvent('response', `200 OK - Stream started`);
+      while (true) {
+        const { done, value } = await reader!.read();
+        
+        if (done) {
+          addTraceEvent('complete', 'Stream completed');
+          break;
+        }
 
-              const reader = response.body?.getReader();
-              const decoder = new TextDecoder();
+        const chunk = decoder.decode(value);
+        addTraceEvent('chunk', `Received ${chunk.length} bytes`);
+        setStreamedText(prev => prev + chunk);
+      }
+    } catch (error) {
+      addTraceEvent('error', `Stream error: ${error}`);
+      setStreamedText(prev => prev + '\nError: Stream interrupted');
+    } finally {
+      setIsStreaming(false);
+    }
+  };
 
-              // Process stream
-              while (true) {
-                const { done, value } = await reader!.read();
-                if (done) break;
-                
-                const text = decoder.decode(value);
-                if (text.includes("[DONE]")) {
-                  addTraceEvent('complete', 'Stream completed');
-                  break;
-                }
-                
-                setStreamedText((prev) => prev + text);
-                addTraceEvent('chunk', `Received: "${text.trim()}"`);
-              }
-
-              setIsStreaming(false);
-              setStreamedText((prev) => prev + "\nStream finished.");
-            }}
-            disabled={isStreaming}
-          >
-            {isStreaming ? "Streaming..." : "Start Stream"}
-          </button>
-        </div>
-
-        <div className="flex-grow relative border-2 border-green-400 rounded">
-          <textarea
-            ref={textAreaRef}
-            id="streamedText"
-            value={streamedText}
-            readOnly
-            className="absolute inset-0 bg-black py-2 px-3 text-green-400 font-mono resize-none overflow-auto scrollbar-thin scrollbar-thumb-green-400 scrollbar-track-black"
-            style={{
-              scrollbarWidth: 'thin',
-              scrollbarColor: '#4ade80 #000000'
-            }}
-          />
-        </div>
-      </div>
-
-      {/* Trace Panel - Matches chat height with scroll */}
-      <div className="bg-black border-2 border-green-400 p-8 w-96 h-[600px] flex flex-col">
-        <h2 className="text-xl font-bold mb-4 text-center flex-shrink-0">REQUEST TRACE</h2>
-        <div 
-          ref={traceRef}
-          className="flex-grow overflow-auto pr-2"
-          style={{
-            scrollbarWidth: 'thin',
-            scrollbarColor: '#4ade80 #000000'
-          }}
-        >
-          <div className="space-y-2">
-            {traceEvents.map((event, index) => (
-              <div 
-                key={index} 
-                className={`text-sm ${
-                  event.type === 'error' ? 'text-red-400' :
-                  event.type === 'request' ? 'text-blue-400' :
-                  event.type === 'response' ? 'text-yellow-400' :
-                  event.type === 'complete' ? 'text-purple-400' :
-                  'text-green-400'
-                }`}
-              >
-                <span className="opacity-50">
-                  {new Date(event.timestamp).toLocaleTimeString('en-US', { 
-                    hour12: false,
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    fractionalSecondDigits: 3
-                  })}
-                </span>
-                {' '}
-                <span className="font-bold">[{event.type.toUpperCase()}]</span>
-                {' '}
-                {event.message}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+  const WindowControls = ({ onMinimize, onMaximize, onClose }: {
+    onMinimize: () => void;
+    onMaximize: () => void;
+    onClose: () => void;
+  }) => (
+    <div className="flex gap-1">
+      <button 
+        onClick={onMinimize}
+        className="w-5 h-5 bg-[#c0c0c0] border-t-[#ffffff] border-l-[#ffffff] border-r-[#808080] border-b-[#808080] border flex items-center justify-center hover:bg-gray-300 active:border-t-[#808080] active:border-l-[#808080] active:border-r-[#ffffff] active:border-b-[#ffffff]"
+        aria-label="Minimize"
+      >
+        _
+      </button>
+      <button 
+        onClick={onMaximize}
+        className="w-5 h-5 bg-[#c0c0c0] border-t-[#ffffff] border-l-[#ffffff] border-r-[#808080] border-b-[#808080] border flex items-center justify-center hover:bg-gray-300 active:border-t-[#808080] active:border-l-[#808080] active:border-r-[#ffffff] active:border-b-[#ffffff]"
+        aria-label="Maximize"
+      >
+        □
+      </button>
+      <button 
+        onClick={onClose}
+        className="w-5 h-5 bg-[#c0c0c0] border-t-[#ffffff] border-l-[#ffffff] border-r-[#808080] border-b-[#808080] border flex items-center justify-center hover:bg-gray-300 active:border-t-[#808080] active:border-l-[#808080] active:border-r-[#ffffff] active:border-b-[#ffffff]"
+        aria-label="Close"
+      >
+        ×
+      </button>
     </div>
+  );
+
+  return (
+    <main className="min-h-screen bg-[#008080] p-8">
+      <div className="flex items-start justify-center gap-4">
+        {/* Chat Window */}
+        <section 
+          className={`bg-[#c0c0c0] border-t-[#ffffff] border-l-[#ffffff] border-r-[#808080] border-b-[#808080] border-2 flex flex-col ${getWindowClasses(chatWindowState)}`}
+        >
+          {/* Title Bar */}
+          <div className="bg-[#000080] px-2 py-1 flex items-center justify-between text-white select-none">
+            <div className="flex items-center gap-1">
+              <Image src="/window.svg" alt="Window icon" width={16} height={16} className="mr-1" />
+              <span className="font-bold text-sm">Chat Stream</span>
+            </div>
+            <WindowControls 
+              onMinimize={() => {/* Add minimize handler */}}
+              onMaximize={() => setChatWindowState(prev => ({...prev, isMaximized: !prev.isMaximized}))}
+              onClose={() => {/* Add close handler */}}
+            />
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 p-4 flex flex-col gap-4">
+            <div>
+              <label htmlFor="numWords" className="block mb-2 text-sm text-black font-medium">Number of Words:</label>
+              <input
+                type="number"
+                id="numWords"
+                value={numWords}
+                onChange={(e) => setNumWords(e.target.value)}
+                className="w-full px-2 py-1 bg-white text-black border-t-[#808080] border-l-[#808080] border-r-[#ffffff] border-b-[#ffffff] border text-sm"
+                min="1"
+                disabled={isStreaming}
+              />
+            </div>
+
+            <div className="flex justify-center">
+              <button
+                onClick={handleStream}
+                disabled={isStreaming}
+                className="px-4 py-1 bg-[#c0c0c0] text-black border-t-[#ffffff] border-l-[#ffffff] border-r-[#808080] border-b-[#808080] border text-sm hover:bg-gray-300 active:border-t-[#808080] active:border-l-[#808080] active:border-r-[#ffffff] active:border-b-[#ffffff]"
+              >
+                Stream Text
+              </button>
+            </div>
+
+            <textarea
+              ref={textAreaRef}
+              value={streamedText}
+              readOnly
+              className="flex-1 w-full px-2 py-1 bg-white text-black border-t-[#808080] border-l-[#808080] border-r-[#ffffff] border-b-[#ffffff] border resize-none text-sm font-mono"
+            />
+          </div>
+        </section>
+
+        {/* Trace Window */}
+        <section 
+          className={`bg-[#c0c0c0] border-t-[#ffffff] border-l-[#ffffff] border-r-[#808080] border-b-[#808080] border-2 flex flex-col ${getWindowClasses(traceWindowState)}`}
+        >
+          {/* Title Bar */}
+          <div className="bg-[#000080] px-2 py-1 flex items-center justify-between text-white select-none">
+            <div className="flex items-center gap-1">
+              <Image src="/file.svg" alt="File icon" width={16} height={16} className="mr-1" />
+              <span className="font-bold text-sm">Request Trace</span>
+            </div>
+            <WindowControls 
+              onMinimize={() => {/* Add minimize handler */}}
+              onMaximize={() => setTraceWindowState(prev => ({...prev, isMaximized: !prev.isMaximized}))}
+              onClose={() => {/* Add close handler */}}
+            />
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 p-4 flex flex-col overflow-hidden">
+            <div 
+              ref={traceRef}
+              className="flex-1 w-full h-full overflow-y-auto bg-white border-t-[#808080] border-l-[#808080] border-r-[#ffffff] border-b-[#ffffff] border p-2"
+            >
+              {traceEvents.map((event, index) => (
+                <div key={index} className="mb-2 text-sm trace-event whitespace-pre font-mono">
+                  <span className="text-black">
+                    {new Date(event.timestamp).toLocaleTimeString([], {
+                      hour12: true,
+                      hour: "numeric",
+                      minute: "2-digit",
+                      second: "2-digit"
+                    })} PM - </span>
+                  <span className={`${
+                    event.type === 'error' ? 'text-red-600' :
+                    event.type === 'complete' ? 'text-green-600' :
+                    'text-black'
+                  }`}>
+                    {event.message}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
   );
 }
